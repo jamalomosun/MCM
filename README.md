@@ -1,91 +1,62 @@
-# DWTS MCM/ICM Problem C — Reproduction and Extensions
+# DWTS MCM/ICM Problem C
 
-This repository reconstructs the modeling pipeline described in the submitted MCM/ICM 2026 Problem C paper, **“Strictly Com(e)puting: An Analysis of Scoring on Dancing with the Stars.”**
+This repository is a record of my work for our team’s MCM/ICM 2026 Problem C work, “Strictly Com(e)puting: An Analysis of Scoring on Dancing with the Stars.”
 
-## What the paper does
+Models
 
-The paper treats hidden fan voting as an unobserved quantity and uses three layers of modeling:
+Model 1 — Quadratic / Integer ProgrammingUses judge scores and observed eliminations/final placements to constrain hidden fan support. Percentage scoring is handled with quadratic programming; rank scoring with integer programming.
 
-1. **Model 1 — Quadratic / Integer Programming:** derives deterministic feasible regions for hidden fan support from observed judge scores and eliminations. Percentage scoring is handled with quadratic programming; rank scoring with integer programming.
-2. **Model 2 — Bayesian Popularity Inference:** assigns each contestant a latent popularity parameter, uses a multinomial-logit elimination/winner likelihood, and estimates posterior popularity with Hamiltonian Monte Carlo in rStan.
-3. **Model 3 — Multi-Model Feature Analysis:** uses multiple linear regression as a baseline, then random forests and a multilayer perceptron to model nonlinear relationships between contestant characteristics and three success measures: placement, average judge score, and Bayesian fan-support estimates. Feature importance is summarized with MDI and SHAP.
+Model 2 — Bayesian Popularity InferenceTreats contestant fan popularity as a latent variable, models weekly outcomes with a multinomial-logit likelihood, and estimates popularity with HMC/rStan. The fan estimates used to support this work are here:
 
-The paper reports that Model 2 matches 362 of 388 Model-1 constraints (93.56%) and that age is the strongest Model-3 feature, with random-forest MDI about 59.45%.
+https://github.com/raymondkim777/MCM-Prep/blob/main/mcm/data/dwts_fan_estimates.csv
 
-## Repository layout
+Model 3 — Feature AnalysisUses the contestant features from the paper—age, ballroom partner, industry, home state, and home country/region—to study placement, average judge score, and fan support. The workflow is split into independent processes:
 
-```text
 model3/
-  common.py
-  01_mlr.py
-  02_random_forest.py
-  03_mlp.py
-  04_mlp_shap.py
-  05_compare_models.py
-  06_ensemble.py
-scoring/
-  01_simulate_scoring_systems.py
-  02_optimize_dynamic_weights.py
-outputs/
-```
+  01_mlr.py              # linear baseline
+  02_random_forest.py    # random forest + MDI
+  03_mlp.py              # multilayer perceptron
+  04_mlp_shap.py         # SHAP analysis of MLP
+  05_compare_models.py   # model comparison
+  06_ensemble.py         # RF + MLP ensemble (extension)
+  07_grouped_importance.py # grouped/permutation importance (extension)
 
-## Model 3 in detail
+The paper reports age as the strongest Model-3 feature and uses MDI/SHAP to interpret the nonlinear models.
 
-### MLR baseline
+Scoring-system extension
 
-`model3/01_mlr.py` is the linear baseline. It encodes the five feature families used by the paper:
+The paper proposes equal judge/fan weighting early, a 60/40 judge/fan weighting after halfway, and equal weighting again in the finale. scoring/02_optimize_dynamic_weights.py formalizes that rationale as an optimization problem. The optimizer is a new extension, not a result reported in the original paper.
 
-- celebrity age
-- ballroom partner
-- industry
-- home state
-- home country/region
+Reproducibility
 
-Categorical variables are one-hot encoded and age is imputed/scaled. The target can be `placement`, `avg_judge_score`, or `fan_support` when Model-2 estimates are supplied.
+The main improvements recommended for future runs are:
 
-### Random forest
+use season-level cross-validation to prevent leakage;
 
-`model3/02_random_forest.py` fits a `RandomForestRegressor` and exports impurity-based feature importance (MDI). The paper's reported age importance can be compared to the transformed/aggregated importance output.
+pin Python/R package versions and record input hashes;
 
-### MLP
+save seeds, preprocessing objects, model parameters, and Stan diagnostics;
 
-`model3/03_mlp.py` fits a nonlinear `MLPRegressor`. This is the paper's neural-network alternative to linear regression.
+report uncertainty for MDI, permutation importance, and SHAP;
 
-### SHAP
+propagate Model-2 posterior draws into Model 3 rather than using only posterior means;
 
-`model3/04_mlp_shap.py` explains the fitted MLP with permutation SHAP and aggregates one-hot variables back to the original feature families. This is deliberately kept separate from model fitting so that the predictive model and the explanation method can be tested independently.
+distinguish prediction from causal interpretation;
 
-SHAP is a game-theoretic feature-attribution framework; the current SHAP project documents both model-specific tree explanations and model-agnostic explainers. See https://github.com/shap/shap.
+keep original-paper outputs separate from extension outputs.
 
-### RF + MLP ensemble
+Data
 
-`model3/06_ensemble.py` is an extension beyond the paper. It fits both models and chooses a convex weight using K-fold cross-validation:
+The supplied competition CSV supports the judge-side and contestant-feature analyses.  Absolute fan-vote counts additionally require the viewership-derived data described in the paper.
 
-\[
-\hat y_{ens}=w\hat y_{RF}+(1-w)\hat y_{MLP},\qquad 0\le w\le1.
-\]
+Running Model 3
 
-The test set is held out until after the weight is learned. This avoids choosing the ensemble weight on the same data used for final evaluation.
+python model3/01_mlr.py --data data/2026_MCM_Problem_C_Data.csv --target placement
+python model3/02_random_forest.py --data data/2026_MCM_Problem_C_Data.csv --target placement
+python model3/03_mlp.py --data data/2026_MCM_Problem_C_Data.csv --target placement
+python model3/04_mlp_shap.py --data data/2026_MCM_Problem_C_Data.csv --target placement
+python model3/06_ensemble.py --data data/2026_MCM_Problem_C_Data.csv --target placement
 
-## Scoring-system optimization
+Paper result
 
-The paper proposes a three-phase policy:
-
-- first half: 50% judge / 50% fan;
-- after halfway point: 60% judge / 40% fan;
-- finale: 50% judge / 50% fan.
-
-`scoring/02_optimize_dynamic_weights.py` turns that rationale into an explicit optimization problem. It searches over:
-
-- early judge weight,
-- late judge weight,
-- the fraction of the season where late weighting begins.
-
-The objective is a weighted combination of:
-
-1. disagreement with observed eliminations;
-2. survival of the worst-judged contestant;
-3. excessive reduction of fan influence.
-
-These objective terms are **an extension**, not a result reported by the paper. Change their weights and document the choice before comparing policies.
-
+The original paper reports 93.56% agreement between Model 2 estimates and Model-1 constraints and identifies age as the strongest Model-3 feature. 
